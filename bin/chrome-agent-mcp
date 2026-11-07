@@ -3,13 +3,14 @@
 // attached to the Chrome window this package started). Subcommands manage that
 // browser: open, status, tab.
 import { spawn } from 'node:child_process';
+import { accessSync, constants } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 import { mcpArgs, parseArgs, parseTabArgs, resolvePort } from '../lib/cli.mjs';
 import { ensurePatch } from '../lib/ensure.mjs';
-import { launchPlan, profileDir } from '../lib/launch.mjs';
+import { launchPlan, outputDir, profileDir } from '../lib/launch.mjs';
 import { formatTabs } from '../lib/tabs.mjs';
 
 const require = createRequire(import.meta.url);
@@ -44,6 +45,14 @@ function here(port) {
   return launchPlan({ platform, profileDir: profile, port, chromePath: process.env.CHROME_PATH });
 }
 
+function outDir() {
+  return outputDir({
+    platform: process.platform,
+    home: homedir(),
+    localAppData: process.env.LOCALAPPDATA,
+  });
+}
+
 async function cmdStatus(port, patch) {
   console.log(`playwright-core patch: ${patch.status === 'already' ? 'already applied' : 'applied now'}`);
   const info = await version(port);
@@ -64,6 +73,16 @@ async function cmdOpen(port) {
     return 0;
   }
   const plan = here(port);
+  // A Windows install that is not in Program Files (Canary, a 32 bit build, a
+  // user level install) must fail with the path it tried, not with "port closed".
+  if (isAbsolute(plan.command)) {
+    try {
+      accessSync(plan.command, constants.X_OK);
+    } catch {
+      console.error(`ERROR: no Chrome at ${plan.command}. Set CHROME_PATH to the binary Chrome uses.`);
+      return 1;
+    }
+  }
   const child = spawn(plan.command, plan.args, { stdio: 'ignore', detached: true });
   child.unref();
   if (!(await waitForPort(port))) {
@@ -134,14 +153,9 @@ async function cmdTab(port, rest) {
     });
     ws.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data));
-      if (message.id === 1) {
-        if (message.error) reject(new Error(message.error.message));
-        else resolve(message.result.targetId);
-        return;
-      }
-      // Answer to the optional title tagging, which runs in its own session.
-      if (message.id === 2 && message.error) reject(new Error(message.error.message));
-      if (message.id === 2) resolve(tagging.targetId);
+      if (message.id !== 1) return;
+      if (message.error) reject(new Error(message.error.message));
+      else resolve(message.result.targetId);
     });
     ws.addEventListener('error', () => reject(new Error('CDP unreachable')));
   }).finally(() => ws.close());
@@ -204,7 +218,7 @@ function cmdMcp(port, rest) {
   const pkgPath = require.resolve('@playwright/mcp/package.json');
   const pkg = require(pkgPath);
   const cli = join(dirname(pkgPath), pkg.bin['playwright-mcp']);
-  const child = spawn(process.execPath, [cli, ...mcpArgs({ port, rest })], { stdio: 'inherit' });
+  const child = spawn(process.execPath, [cli, ...mcpArgs({ port, rest, outputDir: outDir() })], { stdio: 'inherit' });
   child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 0)));
   return new Promise(() => {});
 }
@@ -223,7 +237,8 @@ function usage() {
   chrome-agent-mcp tabs             list the open pages (id, title, url)
 
   CHROME_AGENT_MCP_PORT   debug port (default 9223)
-  CHROME_PATH             chrome binary, when it is not in the default location`);
+  CHROME_PATH             chrome to start, when it is not where this expects it:
+                          the .app bundle on macOS, the .exe on Windows`);
   return 0;
 }
 

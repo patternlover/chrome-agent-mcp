@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildChromeArgs, launchPlan, profileDir } from '../lib/launch.mjs';
+import { buildChromeArgs, launchPlan, outputDir, profileDir } from '../lib/launch.mjs';
 
 const base = { profileDir: '/tmp/profile', port: 9223 };
 
@@ -28,6 +28,11 @@ test('macOS launches through open without bringing Chrome to the foreground', ()
   assert.ok(plan.args.includes('--args'));
 });
 
+test('CHROME_PATH is the .app on macOS, so Canary and non standard installs work', () => {
+  const plan = launchPlan({ ...base, platform: 'darwin', chromePath: '/Applications/Google Chrome Canary.app' });
+  assert.deepEqual(plan.args.slice(0, 5), ['-g', '-n', '-a', '/Applications/Google Chrome Canary.app', '--args']);
+});
+
 test('windows launches the chrome binary directly, with no open --args', () => {
   const plan = launchPlan({ ...base, platform: 'win32', chromePath: 'C:\\Chrome\\chrome.exe' });
   assert.equal(plan.command, 'C:\\Chrome\\chrome.exe');
@@ -42,4 +47,12 @@ test('an unsupported platform fails loudly instead of guessing', () => {
 test('the profile dir is per platform and per user', () => {
   assert.match(profileDir({ platform: 'darwin', home: '/Users/e' }), /^\/Users\/e\/.local\/share\/chrome-agent-mcp\/profile$/);
   assert.match(profileDir({ platform: 'win32', home: 'C:\\Users\\E', localAppData: 'C:\\Users\\E\\AppData\\Local' }), /chrome-agent-mcp.profile$/i);
+});
+
+test('outputs land beside the profile, not in the project the agent runs in', () => {
+  assert.equal(outputDir({ platform: 'darwin', home: '/Users/e' }), '/Users/e/.local/share/chrome-agent-mcp/output');
+  assert.equal(
+    outputDir({ platform: 'win32', home: 'C:\\Users\\E', localAppData: 'C:\\Users\\E\\AppData\\Local' }),
+    'C:\\Users\\E\\AppData\\Local\\chrome-agent-mcp\\output',
+  );
 });

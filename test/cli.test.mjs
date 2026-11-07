@@ -15,6 +15,26 @@ test('extra flags after the MCP command reach playwright-mcp untouched', () => {
   assert.deepEqual(mcpArgs({ port: 9223, rest }).slice(2), ['--headless', '--caps=vision']);
 });
 
+test('the output dir is pinned outside the project, unless the caller set one', () => {
+  assert.deepEqual(mcpArgs({ port: 9223, rest: [], outputDir: '/data/output' }), [
+    '--cdp-endpoint',
+    'http://127.0.0.1:9223',
+    '--output-dir',
+    '/data/output',
+  ]);
+  assert.deepEqual(mcpArgs({ port: 9223, rest: ['--output-dir', '/mine'], outputDir: '/data/output' }), [
+    '--cdp-endpoint',
+    'http://127.0.0.1:9223',
+    '--output-dir',
+    '/mine',
+  ]);
+  assert.deepEqual(mcpArgs({ port: 9223, rest: ['--output-dir=/mine'], outputDir: '/data/output' }), [
+    '--cdp-endpoint',
+    'http://127.0.0.1:9223',
+    '--output-dir=/mine',
+  ]);
+});
+
 test('close is a subcommand, not a flag for the MCP', () => {
   assert.deepEqual(parseArgs(['close']), { cmd: 'close', rest: [] });
 });
