@@ -77,9 +77,11 @@ Disabling it is what makes `browser_tabs select` safe, and it has a visible cons
 window no longer follows the agent. The agent works on whatever tab it selected, the window keeps
 showing the tab you last clicked. To see what it has open, ask it to run `chrome-agent-mcp tabs`.
 
-Both patches are **idempotent**, applied on every start (not only at install: npm 11 skips install
-scripts unless they are allowed), and applied **all or nothing** — if an anchor is gone you get an
-error instead of an install that silently stole your focus.
+Both patches are **idempotent** and applied **on every start**, not only at install: npm 11 skips
+install scripts unless they are allowed, and on a git install the dependency is not there yet when
+the script runs. The install step only reports; the run-time check is the gate — if the patch
+cannot be applied, the MCP refuses to start instead of quietly stealing your focus. Both patches
+are applied all or nothing, so a half-patched bundle is never left behind.
 
 ## Commands
 
