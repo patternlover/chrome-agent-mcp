@@ -110,7 +110,7 @@ are applied all or nothing, so a half-patched bundle is never left behind.
 | `chrome-agent-mcp open` | starts Chrome with the debug port, without bringing it to the foreground |
 | `chrome-agent-mcp close` | quits that Chrome; the profile keeps its logins, the port closes |
 | `chrome-agent-mcp status` | prints whether the port answers, the browser, the profile |
-| `chrome-agent-mcp tab <url>` | opens a tab **in the background**, prints its target id |
+| `chrome-agent-mcp tab [--window] [--label <name>] <url>` | opens a tab **in the background**, prints its target id; `--window` gives it its own window, `--label` prefixes the page title |
 | `chrome-agent-mcp tabs` | lists the open pages (id, title, url) |
 | `chrome-agent-mcp help` | usage |
 
@@ -135,6 +135,28 @@ Environment: `CHROME_AGENT_MCP_PORT` (default `9223`), `CHROME_PATH` (Chrome bin
   `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`: without them
   a background tab throttles its timers and GTM / dataLayer measurements come out late.
 - The profile is a real Chrome profile with real cookies: see **Security** below.
+
+## Two agents on one Chrome
+
+Measured with two MCP clients attached to the same browser: they do not kill each other and they do
+not close the debug connection of the other one — one client's `browser_close` closed its page, the
+other kept working, the browser stayed up.
+
+What does **not** exist is isolation. Every client sees every page (`tabs seen by A: 3 | by B: 3`),
+and tab indices are per-client lists, so `tab 1` means two different pages to two agents. Chrome tab
+groups are not reachable from CDP at all: the protocol has `createTarget`, `attachToTarget`,
+`activateTarget`, `closeTarget` and window bounds, while grouping lives in the extension API
+(`chrome.tabs.group`) — that is what the Playwright Extension gives you, one coloured group per
+client, as soon as its background mode ships.
+
+So the working rules, until then:
+
+- an agent opens the tabs it needs with `chrome-agent-mcp tab --label <name> <url>`, and never
+  touches tabs it did not open;
+- `chrome-agent-mcp close` is the human's command: it takes the browser away from every agent;
+- a separate window per agent (`--window`) is possible and was measured focus-neutral, but it only
+  helps while an agent's work stays in the tabs it was bootstrapped with: tabs the MCP creates
+  afterwards land where the client's current page is.
 
 ## Security
 

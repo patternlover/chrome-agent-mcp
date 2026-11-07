@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { mcpArgs, parseArgs, resolvePort } from '../lib/cli.mjs';
+import { mcpArgs, parseArgs, parseTabArgs, resolvePort } from '../lib/cli.mjs';
 import { ensurePatch } from '../lib/ensure.mjs';
 import { launchPlan, profileDir } from '../lib/launch.mjs';
 import { formatTabs } from '../lib/tabs.mjs';
@@ -113,11 +113,15 @@ async function cmdTabs(port) {
 }
 
 /** Creates a tab in the background: Chromium's default would foreground it and steal focus. */
-async function cmdTab(port, url) {
-  if (!url) {
-    console.error('usage: chrome-agent-mcp tab <url>');
+async function cmdTab(port, rest) {
+  let options;
+  try {
+    options = parseTabArgs(rest);
+  } catch (error) {
+    console.error(error.message);
     return 2;
   }
+  const { url, newWindow, label } = options;
   const info = await version(port);
   if (!info) {
     console.error(`port ${port}: closed. Start it first: chrome-agent-mcp open`);
@@ -126,18 +130,74 @@ async function cmdTab(port, url) {
   const ws = new WebSocket(info.webSocketDebuggerUrl);
   const id = await new Promise((resolve, reject) => {
     ws.addEventListener('open', () => {
-      ws.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url, background: true } }));
+      ws.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url, background: true, newWindow } }));
     });
     ws.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data));
-      if (message.id !== 1) return;
-      if (message.error) reject(new Error(message.error.message));
-      else resolve(message.result.targetId);
+      if (message.id === 1) {
+        if (message.error) reject(new Error(message.error.message));
+        else resolve(message.result.targetId);
+        return;
+      }
+      // Answer to the optional title tagging, which runs in its own session.
+      if (message.id === 2 && message.error) reject(new Error(message.error.message));
+      if (message.id === 2) resolve(tagging.targetId);
     });
     ws.addEventListener('error', () => reject(new Error('CDP unreachable')));
   }).finally(() => ws.close());
   console.log(id);
+  if (label) await tagTitle(port, id, label);
   return 0;
+}
+
+/**
+ * Prefixes the page title, so a tab strip with several agents reads clearly.
+ * Best effort: a single page application may rewrite its title afterwards, which
+ * is why the separate window, not the label, is what really keeps work apart.
+ */
+async function tagTitle(port, targetId, label) {
+  const titleOf = async () => {
+    try {
+      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) })).json();
+      return list.find((t) => t.id === targetId)?.title ?? '';
+    } catch {
+      return '';
+    }
+  };
+
+  // Tag after the page has a title of its own, otherwise the load overwrites it.
+  for (let i = 0; i < 40; i++) {
+    const title = await titleOf();
+    if (title.startsWith(label)) return;
+    if (title) {
+      await evaluateInTarget(port, targetId, `document.title = ${JSON.stringify(label)} + ' \u00b7 ' + document.title`);
+      await sleep(300);
+      if ((await titleOf()).startsWith(label)) return;
+      return;
+    }
+    await sleep(250);
+  }
+}
+
+async function evaluateInTarget(port, targetId, expression) {
+  const info = await version(port);
+  if (!info) return;
+  const ws = new WebSocket(info.webSocketDebuggerUrl);
+  await new Promise((resolve) => {
+    ws.addEventListener('open', () => {
+      ws.send(JSON.stringify({ id: 1, method: 'Target.attachToTarget', params: { targetId, flatten: true } }));
+    });
+    ws.addEventListener('message', (event) => {
+      const message = JSON.parse(String(event.data));
+      if (message.id === 1 && message.result?.sessionId) {
+        ws.send(JSON.stringify({ id: 2, method: 'Runtime.evaluate', sessionId: message.result.sessionId, params: { expression } }));
+        return;
+      }
+      if (message.id === 2) resolve();
+    });
+    ws.addEventListener('error', () => resolve());
+    setTimeout(resolve, 5000);
+  }).finally(() => ws.close());
 }
 
 function cmdMcp(port, rest) {
@@ -156,7 +216,10 @@ function usage() {
   chrome-agent-mcp open             start that Chrome without bringing it to the foreground
   chrome-agent-mcp close            quit that Chrome, keeping the profile and its logins
   chrome-agent-mcp status           print whether the debug port answers
-  chrome-agent-mcp tab <url>        open a tab in the background, print its target id
+  chrome-agent-mcp tab [--window] [--label <name>] <url>
+                                    open a tab in the background, print its target id
+                                    --window  own window, so agents do not mix visually
+                                    --label   prefix the page title with the agent name
   chrome-agent-mcp tabs             list the open pages (id, title, url)
 
   CHROME_AGENT_MCP_PORT   debug port (default 9223)
@@ -189,7 +252,7 @@ if (cmd === 'help') {
       : cmd === 'close'
         ? cmdClose(port)
       : cmd === 'tab'
-        ? cmdTab(port, rest[0])
+        ? cmdTab(port, rest)
       : cmd === 'tabs'
         ? cmdTabs(port)
         : cmdMcp(port, rest));
