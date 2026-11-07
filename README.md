@@ -154,9 +154,10 @@ So the working rules, until then:
 - an agent opens the tabs it needs with `chrome-agent-mcp tab --label <name> <url>`, and never
   touches tabs it did not open;
 - `chrome-agent-mcp close` is the human's command: it takes the browser away from every agent;
-- a separate window per agent (`--window`) is possible and was measured focus-neutral, but it only
-  helps while an agent's work stays in the tabs it was bootstrapped with: tabs the MCP creates
-  afterwards land where the client's current page is.
+- `--window` opens a tab in a new window and was measured focus-neutral, but it does **not** keep
+  an agent there: with an agent's tab in window `319208161`, the MCP's own `browser_tabs new` put
+  the next tab back in the original window `319208159`. A window per agent holds only for the tabs
+  opened through `chrome-agent-mcp tab --window`, which is rarely the shape of a real task.
 
 ## Security
 
