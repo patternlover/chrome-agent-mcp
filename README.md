@@ -149,7 +149,20 @@ groups are not reachable from CDP at all: the protocol has `createTarget`, `atta
 (`chrome.tabs.group`) — that is what the Playwright Extension gives you, one coloured group per
 client, as soon as its background mode ships.
 
+Measured with two agents doing actual work side by side (5 rounds of navigate, set a marker in the
+page, read it back): every round correct for both, no state bleeding between their pages, one
+agent's `browser_close` left the other working, the browser survived 43 pages, and the frontmost app
+never changed.
+
+The failures come from the other direction: **inside one client**. Twelve parallel
+`tabs new` + `navigate` calls from the same agent produced 9 `net::ERR_ABORTED`, because the MCP
+keeps a "current tab" per client and parallel calls move it under each other. The same work done
+serially inside each agent, in parallel across agents, failed zero times.
+
 So the working rules, until then:
+
+- parallel between agents, serial inside one: an agent that needs many tabs opens them one after
+  the other;
 
 - an agent opens the tabs it needs with `chrome-agent-mcp tab --label <name> <url>`, and never
   touches tabs it did not open;
