@@ -6,6 +6,8 @@ when the agent opens a tab.
 You keep working in your own browser on one screen; the agent drives and you watch in another
 window, already logged into the sites it needs.
 
+Verified on macOS 2026-11-07 with `@playwright/mcp` 0.0.84, Chrome 157, Node 26.
+
 ## Install
 
 Two paths, both exercised end to end on macOS with npm 11.17 (2026-11-07).
@@ -39,6 +41,13 @@ npm i github:patternlover/chrome-agent-mcp
 above, or install globally where npm's prefix is writable and check that `chrome-agent-mcp status`
 prints the patch line.
 
+On Pi, the second entry is one command, user level, so every session has the browser:
+
+```bash
+pi mcp add playwright -- chrome-agent-mcp
+pi mcp list
+```
+
 Then, once, start the browser it will drive:
 
 ```bash
@@ -49,6 +58,80 @@ chrome-agent-mcp status    # port 9223 open, which browser, which profile
 Log into whatever the agent needs **in that window** (its profile is persistent:
 `~/.local/share/chrome-agent-mcp/profile` on macOS,
 `%LOCALAPPDATA%\chrome-agent-mcp\profile` on Windows). It survives restarts.
+
+Screenshots and snapshots the MCP names itself go to `~/.local/share/chrome-agent-mcp/output`
+(`%LOCALAPPDATA%\chrome-agent-mcp\output`), never `<project>/.playwright-mcp`: the MCP inherits the
+session directory as its cwd, and 25 tool calls per task should not leave files in your repo.
+`--output-dir <path>` overrides it, for one run.
+
+## Use it from an agent
+
+With no argument the binary **is** the MCP server on stdio, so every client starts it the same
+way. Pi 1.5.0, 2026-11-07:
+
+```bash
+pi mcp add playwright -- chrome-agent-mcp      # user level: every session
+pi mcp list                                    # connected, 25 tools
+```
+
+which writes `~/.pi/agent/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "chrome-agent-mcp",
+      "description": "Playwright over the local Chrome window, tabs created in background"
+    }
+  }
+}
+```
+
+From then on the agent has the browser without anybody naming it: tools arrive as
+`mcp__playwright__browser_click` and the rest of the 25. With Pi's default `codemode` exposure they
+are not declared to the model but callable from a codemode script, which is what keeps 25 tool
+descriptions out of every prompt; promote the two or three you want visible with
+`"toolExposure": { "browser_navigate": "direct", "browser_click": "direct" }`.
+
+The order that works:
+
+```bash
+chrome-agent-mcp open      # you start the browser, the MCP only attaches to it
+# log in, in that window
+# ... work, several sessions, several agents
+chrome-agent-mcp close     # you end it: this takes the browser from every agent
+```
+
+Nothing in the MCP starts or stops Chrome: the server is launched with `--cdp-endpoint`, and with
+the port closed it has nothing to attach to. That asymmetry is the point — the browser is yours,
+the agent is a guest with a key that exists only while the door is open.
+
+## GTM: the import and the debug panel, driven instead of hand-carried
+
+This is the case the package was built for, and it works because of what GTM does *not* have.
+
+- **No import/export endpoint.** The Tag Manager API v2 manages
+  `accounts.containers.workspaces.{tags,triggers,variables,folders}` one object at a time; the
+  container JSON format of *Admin > Import/Export* is not part of it (verified 2026-11-07 against
+  the API reference, whose resource list has no import or export method).
+- **No preview/debug API.** Preview opens `tagassistant.google.com`, which connects to your site
+  with a `?gtm_debug=` signal and a `_TAG_ASSISTANT` cookie, and reports which tags fired in its
+  own page. Nothing in the API v2 exposes that.
+
+Both are client-side UI. So the agent drives the UI it is already logged into:
+
+| step | how |
+|---|---|
+| import a container JSON | `browser_navigate` to *Admin > Import Container*, `browser_file_upload` on the file input, read the banner for `Not found.` / the warnings |
+| preview | click *Preview*, the site loads in a tab with the debug signal, connected |
+| debug | `browser_snapshot` / `browser_console_messages` / `browser_network_requests` on the Tag Assistant page and on the site: which tags fired, which did not, what the dataLayer received |
+| dataLayer | `browser_evaluate` on the site tab, in the container's own context, or read the collect requests the tags actually sent |
+
+What that replaces: the export/import round trip by hand, and the "tell me what you see in the
+debug panel" loop — the panel is a page, so the agent reads it. What it does **not** replace: the
+judgement. An import writes to a live workspace, and the agent has whatever the logged-in account
+has; the guard is GTM's own workflow (workspace, preview, then *Submit* as a separate human step),
+plus the fact that `chrome-agent-mcp close` is yours and ends the session.
 
 ## Why this exists
 
@@ -117,7 +200,10 @@ are applied all or nothing, so a half-patched bundle is never left behind.
 Flags after the command go to `playwright-mcp` untouched:
 `chrome-agent-mcp --caps=vision`.
 
-Environment: `CHROME_AGENT_MCP_PORT` (default `9223`), `CHROME_PATH` (Chrome binary).
+Environment: `CHROME_AGENT_MCP_PORT` (default `9223`); `CHROME_PATH` for a Chrome this package does
+not expect — the `.app` bundle on macOS (`open -a` takes an app, not the binary inside it), the
+`.exe` on Windows, where `open` checks it exists and names the path it tried instead of reporting a
+closed port.
 
 ## Limits
 
@@ -126,8 +212,7 @@ Environment: `CHROME_AGENT_MCP_PORT` (default `9223`), `CHROME_PATH` (Chrome bin
   a tab switch activates the app on macOS. Watch the tab you clicked, ask the agent for
   `chrome-agent-mcp tabs` to know what it has open.
 - **macOS and Windows only.** Linux is refused rather than guessed. Windows is unit-tested, not
-  exercised on a real machine.
-- **Google Chrome and Chrome for Testing**, like `@playwright/mcp` itself. Arc, Stedding and
+  exercised on a real machine.- **Google Chrome and Chrome for Testing**, like `@playwright/mcp` itself. Arc, Stedding and
   other Chromium forks are unsupported: the debug port may work, nothing is guaranteed.
 - **No extension tooling.** For install/reload/inspect of extensions use
   `chrome-devtools-mcp`, which attaches to Chrome but not to Electron or unsupported forks.
