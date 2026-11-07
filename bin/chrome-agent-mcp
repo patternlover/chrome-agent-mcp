@@ -74,6 +74,31 @@ async function cmdOpen(port) {
   return 0;
 }
 
+/** Quits the browser we started: the profile keeps its logins, the port closes. */
+async function cmdClose(port) {
+  const info = await version(port);
+  if (!info) {
+    console.log(`port ${port}: already closed`);
+    return 0;
+  }
+  const ws = new WebSocket(info.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', () => ws.send(JSON.stringify({ id: 1, method: 'Browser.close' })));
+    ws.addEventListener('message', () => resolve());
+    ws.addEventListener('error', () => reject(new Error('CDP unreachable')));
+  }).finally(() => ws.close());
+
+  for (let i = 0; i < 20; i++) {
+    if (!(await version(port))) {
+      console.log(`port ${port}: closed`);
+      return 0;
+    }
+    await sleep(250);
+  }
+  console.error(`ERROR: asked Chrome to close but port ${port} still answers`);
+  return 1;
+}
+
 /** Every open page, so the human can see what the agent has open without switching. */
 async function cmdTabs(port) {
   try {
@@ -129,6 +154,7 @@ function usage() {
 
   chrome-agent-mcp                  run the MCP server (stdio), attached to the local Chrome
   chrome-agent-mcp open             start that Chrome without bringing it to the foreground
+  chrome-agent-mcp close            quit that Chrome, keeping the profile and its logins
   chrome-agent-mcp status           print whether the debug port answers
   chrome-agent-mcp tab <url>        open a tab in the background, print its target id
   chrome-agent-mcp tabs             list the open pages (id, title, url)
@@ -160,6 +186,8 @@ if (cmd === 'help') {
     ? cmdStatus(port, patch)
     : cmd === 'open'
       ? cmdOpen(port)
+      : cmd === 'close'
+        ? cmdClose(port)
       : cmd === 'tab'
         ? cmdTab(port, rest[0])
       : cmd === 'tabs'

@@ -15,6 +15,10 @@ test('extra flags after the MCP command reach playwright-mcp untouched', () => {
   assert.deepEqual(mcpArgs({ port: 9223, rest }).slice(2), ['--headless', '--caps=vision']);
 });
 
+test('close is a subcommand, not a flag for the MCP', () => {
+  assert.deepEqual(parseArgs(['close']), { cmd: 'close', rest: [] });
+});
+
 test('helper subcommands keep their own arguments', () => {
   assert.deepEqual(parseArgs(['tab', 'https://example.com']), { cmd: 'tab', rest: ['https://example.com'] });
   assert.deepEqual(parseArgs(['status']), { cmd: 'status', rest: [] });

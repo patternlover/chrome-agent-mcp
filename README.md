@@ -108,6 +108,7 @@ are applied all or nothing, so a half-patched bundle is never left behind.
 |---|---|
 | `chrome-agent-mcp` | runs the MCP server (stdio), attached to the local Chrome |
 | `chrome-agent-mcp open` | starts Chrome with the debug port, without bringing it to the foreground |
+| `chrome-agent-mcp close` | quits that Chrome; the profile keeps its logins, the port closes |
 | `chrome-agent-mcp status` | prints whether the port answers, the browser, the profile |
 | `chrome-agent-mcp tab <url>` | opens a tab **in the background**, prints its target id |
 | `chrome-agent-mcp tabs` | lists the open pages (id, title, url) |
@@ -133,8 +134,30 @@ Environment: `CHROME_AGENT_MCP_PORT` (default `9223`), `CHROME_PATH` (Chrome bin
 - The browser is started with `--disable-background-timer-throttling`,
   `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`: without them
   a background tab throttles its timers and GTM / dataLayer measurements come out late.
-- The profile is a real Chrome profile with real cookies. Treat the debug port as a local
-  security hole: any process on the machine can drive that browser while it is open.
+- The profile is a real Chrome profile with real cookies: see **Security** below.
+
+## Security
+
+The Chrome DevTools port has **no authentication**. Chrome says so in their own note on
+[remote debugging](https://developer.chrome.com/blog/remote-debugging-port): while the port is open,
+any process of the same user can list the tabs and read the profile's cookies through the protocol.
+There is no flag for a password or a token, and none can be added by configuration — a token in
+front of the port would gate your client, not the port.
+
+So the port is treated as a session, not as a service: open it when the agent has work to do, close
+it after.
+
+```bash
+chrome-agent-mcp open     # while working
+chrome-agent-mcp close    # when done: Chrome quits, logins stay in the profile
+```
+
+The alternatives, when this is not enough: Playwright can launch the browser itself with
+`--remote-debugging-pipe`, which removes the port entirely (CDP travels on file descriptors 3 and 4;
+measured: zero listening sockets, no `DevToolsActivePort`), at the cost of one focus event at launch
+and a browser whose lifetime is the MCP session. The Playwright Extension takes the other route — no
+port, token per profile, per-client tab groups — but its background mode is not in the published
+MCP yet.
 
 ## Development
 
