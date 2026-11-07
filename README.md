@@ -6,11 +6,25 @@ when the agent opens a tab.
 You keep working in your own browser on one screen; the agent drives and you watch in another
 window, already logged into the sites it needs.
 
-```bash
-npm i -g patternlover/chrome-agent-mcp
+## Install
+
+Two paths, both exercised end to end on macOS with npm 11.17 (2026-11-07).
+
+**No install, via npx** — nothing to keep updated, the MCP fetches the repo:
+
+```json
+{
+  "mcpServers": {
+    "playwright": { "command": "npx", "args": ["-y", "github:patternlover/chrome-agent-mcp"] }
+  }
+}
 ```
 
-MCP client (`~/.pi/agent-home/mcp.json`, `claude mcp add`, or any client with the same format):
+**As a project dependency**, when you want it pinned:
+
+```bash
+npm i github:patternlover/chrome-agent-mcp
+```
 
 ```json
 {
@@ -19,6 +33,11 @@ MCP client (`~/.pi/agent-home/mcp.json`, `claude mcp add`, or any client with th
   }
 }
 ```
+
+`npm i -g patternlover/chrome-agent-mcp` is **not** verified: on this machine npm 11 fails with
+`spawn sh ENOENT` when a git spec is installed globally with a custom prefix. Use one of the two
+above, or install globally where npm's prefix is writable and check that `chrome-agent-mcp status`
+prints the patch line.
 
 Then, once, start the browser it will drive:
 
