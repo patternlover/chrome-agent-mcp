@@ -1,0 +1,29 @@
+{
+  "name": "chrome-agent-mcp",
+  "version": "0.1.0",
+  "description": "Playwright MCP attached to a Chrome window you stay logged into, that does not steal your focus when the agent opens tabs",
+  "type": "module",
+  "bin": {
+    "chrome-agent-mcp": "bin/chrome-agent-mcp"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "scripts/postinstall.mjs"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "postinstall": "node scripts/postinstall.mjs"
+  },
+  "dependencies": {
+    "@playwright/mcp": "0.0.84"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "os": [
+    "darwin",
+    "win32"
+  ]
+}

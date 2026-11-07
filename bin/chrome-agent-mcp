@@ -1,0 +1,170 @@
+#!/usr/bin/env node
+// chrome-agent-mcp: with no arguments it IS the MCP server (Playwright MCP
+// attached to the Chrome window this package started). Subcommands manage that
+// browser: open, status, tab.
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { mcpArgs, parseArgs, resolvePort } from '../lib/cli.mjs';
+import { ensurePatch } from '../lib/ensure.mjs';
+import { launchPlan, profileDir } from '../lib/launch.mjs';
+import { formatTabs } from '../lib/tabs.mjs';
+
+const require = createRequire(import.meta.url);
+
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+async function version(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when the debug port answers: the outcome is read, never assumed. */
+async function waitForPort(port, seconds = 15) {
+  for (let i = 0; i < seconds * 2; i++) {
+    if (await version(port)) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
+function here(port) {
+  const platform = process.platform;
+  const profile = profileDir({
+    platform,
+    home: homedir(),
+    localAppData: process.env.LOCALAPPDATA,
+  });
+  return launchPlan({ platform, profileDir: profile, port, chromePath: process.env.CHROME_PATH });
+}
+
+async function cmdStatus(port, patch) {
+  console.log(`playwright-core patch: ${patch.status === 'already' ? 'already applied' : 'applied now'}`);
+  const info = await version(port);
+  if (!info) {
+    console.log(`port ${port}: closed`);
+    return 0;
+  }
+  console.log(`port ${port}: open`);
+  console.log(`browser: ${info.Browser}`);
+  console.log(`profile: ${here(port).args.find((a) => a.startsWith('--user-data-dir=')).slice('--user-data-dir='.length)}`);
+  return 0;
+}
+
+async function cmdOpen(port) {
+  const info = await version(port);
+  if (info) {
+    console.log(`port ${port}: already open (${info.Browser})`);
+    return 0;
+  }
+  const plan = here(port);
+  const child = spawn(plan.command, plan.args, { stdio: 'ignore', detached: true });
+  child.unref();
+  if (!(await waitForPort(port))) {
+    console.error(`ERROR: Chrome started but the debug port ${port} is not answering`);
+    return 1;
+  }
+  console.log(`port ${port}: open`);
+  return 0;
+}
+
+/** Every open page, so the human can see what the agent has open without switching. */
+async function cmdTabs(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error(String(res.status));
+    console.log(formatTabs(await res.json()));
+    return 0;
+  } catch {
+    console.error(`port ${port}: closed. Start it first: chrome-agent-mcp open`);
+    return 1;
+  }
+}
+
+/** Creates a tab in the background: Chromium's default would foreground it and steal focus. */
+async function cmdTab(port, url) {
+  if (!url) {
+    console.error('usage: chrome-agent-mcp tab <url>');
+    return 2;
+  }
+  const info = await version(port);
+  if (!info) {
+    console.error(`port ${port}: closed. Start it first: chrome-agent-mcp open`);
+    return 1;
+  }
+  const ws = new WebSocket(info.webSocketDebuggerUrl);
+  const id = await new Promise((resolve, reject) => {
+    ws.addEventListener('open', () => {
+      ws.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url, background: true } }));
+    });
+    ws.addEventListener('message', (event) => {
+      const message = JSON.parse(String(event.data));
+      if (message.id !== 1) return;
+      if (message.error) reject(new Error(message.error.message));
+      else resolve(message.result.targetId);
+    });
+    ws.addEventListener('error', () => reject(new Error('CDP unreachable')));
+  }).finally(() => ws.close());
+  console.log(id);
+  return 0;
+}
+
+function cmdMcp(port, rest) {
+  const pkgPath = require.resolve('@playwright/mcp/package.json');
+  const pkg = require(pkgPath);
+  const cli = join(dirname(pkgPath), pkg.bin['playwright-mcp']);
+  const child = spawn(process.execPath, [cli, ...mcpArgs({ port, rest })], { stdio: 'inherit' });
+  child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 0)));
+  return new Promise(() => {});
+}
+
+function usage() {
+  console.log(`chrome-agent-mcp — Playwright MCP over the Chrome window you are logged into.
+
+  chrome-agent-mcp                  run the MCP server (stdio), attached to the local Chrome
+  chrome-agent-mcp open             start that Chrome without bringing it to the foreground
+  chrome-agent-mcp status           print whether the debug port answers
+  chrome-agent-mcp tab <url>        open a tab in the background, print its target id
+  chrome-agent-mcp tabs             list the open pages (id, title, url)
+
+  CHROME_AGENT_MCP_PORT   debug port (default 9223)
+  CHROME_PATH             chrome binary, when it is not in the default location`);
+  return 0;
+}
+
+const port = resolvePort(process.env);
+const { cmd, rest } = parseArgs(process.argv.slice(2));
+
+if (cmd === 'help') {
+  process.exitCode = usage();
+} else {
+  // Applied on every start, not at install time: npm 11 skips install scripts
+  // unless allowed, and running unpatched is exactly the focus theft this exists for.
+  let patch;
+  try {
+    patch = ensurePatch();
+    if (patch.status === 'patched') console.error(`[chrome-agent-mcp] patched playwright-core (${patch.bundle})`);
+  } catch (error) {
+    console.error(`[chrome-agent-mcp] ${error.message}`);
+    console.error('[chrome-agent-mcp] Refusing to start without the patch: new tabs would steal the focus.');
+    process.exit(1);
+  }
+
+  const code = await (cmd === 'status'
+    ? cmdStatus(port, patch)
+    : cmd === 'open'
+      ? cmdOpen(port)
+      : cmd === 'tab'
+        ? cmdTab(port, rest[0])
+      : cmd === 'tabs'
+        ? cmdTabs(port)
+        : cmdMcp(port, rest));
+
+  process.exitCode = code;
+}
